@@ -16,26 +16,42 @@ from pydantic import BaseModel, field_validator
 
 
 class ClusterNameStructuredOutput(BaseModel):
-    cluster_name_to_check: str
-    recommended_cluster_name: str
+    cluster_number: int  # The cluster number we are naming
+    suggested_cluster_name: str  # The name suggested by the LLM
+    quality_score: int = None  # The LLM-evaluated quality score (1-5)
 
-    @field_validator('cluster_name_to_check', 'recommended_cluster_name', mode='before')
-    def check_fields(cls, value, info):
+    @field_validator('cluster_number', 'suggested_cluster_name', 'quality_score', mode='before')
+    def validate_fields(cls, value, info):
         """
-        Validate that 'cluster_name_to_check' and 'recommended_cluster_name' are properly set.
+        Validate that 'cluster_number', 'suggested_cluster_name', and 'quality_score' are properly set.
         """
-        if info.field_name == 'cluster_name_to_check':
+        if info.field_name == 'cluster_number':
+            if not isinstance(value, int) or value < 0:
+                raise ValueError("Invalid or missing 'cluster_number'")
+        elif info.field_name == 'suggested_cluster_name':
             if not isinstance(value, str) or value == "":
-                raise ValueError("Invalid or missing 'cluster_name_to_check'")
-        elif info.field_name == 'recommended_cluster_name':
-            if not isinstance(value, str) or value == "":
-                raise ValueError(
-                    "Invalid or missing 'recommended_cluster_name'")
+                raise ValueError("Invalid or missing 'suggested_cluster_name'")
+        elif info.field_name == 'quality_score':
+            if not isinstance(value, int) or not (1 <= value <= 5):
+                # Enforce fallback score if value is out of range
+                print(f"Warning: Invalid quality score '{
+                      value}' found. Removing this value.")
+                return None
         return value
 
 
 class ElOpenAI:
     DIMENSIONS_GEN3_OPENAI = 1536
+
+    # Dictionary containing LLM token limits (completions models)
+    LLM_TOKEN_LIMITS = {
+        "gpt-3.5-turbo": 4096,
+        "text-davinci-003": 4096,
+        "gpt-4": 8192,
+        "gpt-4-32k": 32768,
+        "gpt-4o": 4096,
+        "gpt-4o-mini": 2048
+    }
 
     # Static list of embedding models with their settings
     embedding_models: Dict = {
@@ -66,6 +82,15 @@ class ElOpenAI:
         # Since removing exclusion terms requires a more expensive API call, we default to False
         self.exclusion_prompt_support = os.getenv(
             "OPENAI_EXCLUSION_PROMPTS", "false").lower() == "true"
+
+    def get_llm_token_limit(self) -> int:
+        """
+        Retrieves the token limit for the current completions model (LLM).
+
+        Returns:
+            int: The token limit for the specified LLM.
+        """
+        return self.LLM_TOKEN_LIMITS.get(self.completions_model, 4096)  # Default to 4096 if model not found
 
     def count_tokens(self, text: str) -> int:
         """
@@ -135,6 +160,7 @@ class ElOpenAI:
                     **params)
 
                 # Extract the embedding from the response
+                # Note: embedding dimensions are immutable per model, so there's no purpose for this parameter
                 embedding = response.data[0].embedding
                 return {
                     "embedding": embedding,
@@ -203,20 +229,36 @@ class ElOpenAI:
             print(f"An error occurred while sending the prompt: {e}")
             raise
 
-    def test_cluster_with_llm(self, cluster_name_to_check: str, list_texts: List) -> ClusterNameStructuredOutput:
+    def name_cluster(self, cluster_number: int, list_texts: List) -> ClusterNameStructuredOutput:
         """
-        Uses OpenAI's chat completions API to extract the exclusion term from a sentence using structured outputs.
+        Uses OpenAI's chat completions API to suggest a name for a given cluster number based on the cluster's text comments.
 
         Args:
-            prompt, system_prompt (str): The prompt and system prompt strings.
+            cluster_number (int): The number of the cluster to name.
+            list_texts (List[str]): A list of text strings representing the contents of the cluster.
 
         Returns:
-            structured response class
+            ClusterNameStructuredOutput: A structured response with the suggested cluster name.
         """
-        system_prompt = "you are a data cluster naming expert. You can look at groups of strings and either agree with the given cluster name or recommend a better one."
-        prompt = f"Given the cluster name '{cluster_name_to_check}', and the associated text strings {
-            list_texts} what is the recommended cluster name?"
-        # Prepare the input messages
+        # System prompt asking the LLM to suggest a name and evaluate the quality of the cluster
+        system_prompt = (
+            "You are an expert in clustering and evaluating groups of text data. "
+            "Your task is to analyze a group of code review comments that belong to a particular k-means generated cluster."
+            "You are to both name and qualty score the usefulness of these comments. "
+            "Name based on the common themes or subjects found in these comments. Suggest a clear and concise name for the cluster. "
+            "Provide a quality score between 1 and 5 (1 being lowest quality, 5 being highest quality) based on the usefulness or importance of the comments."
+            "A general non-specific acknowledgment is considered lower quality and specific, actionable feedback is considered higher quality."
+        )
+
+        # User prompt providing the cluster number and associated comments for analysis
+        prompt = (
+            f"Suggest a descriptive name for cluster "
+            f"{cluster_number}, and provide a quality score, from 1-5."
+            f"Here is a list of code review comments from this cluster to base your decision on: "
+            f"{list_texts}. "
+        )
+
+        # Prepare the input messages for the LLM
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -235,7 +277,7 @@ class ElOpenAI:
 
         except Exception as e:
             print(f"An error occurred: {e}")
-            return ClusterNameStructuredOutput()
+            return ClusterNameStructuredOutput(cluster_number=cluster_number, suggested_cluster_name="Unknown")
 
     def test_openai_connectivity(self, list_text: List[str] = ["Hello, World!"]) -> bool:
         """

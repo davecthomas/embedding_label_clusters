@@ -1,10 +1,11 @@
+from datetime import datetime
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from el_openai import ElOpenAI
+from el_openai import ClusterNameStructuredOutput, ElOpenAI
 from embedding_label import EmbeddingLabel
 import hdbscan
 import umap
@@ -14,90 +15,32 @@ import matplotlib.pyplot as plt
 
 from enum import Enum
 
-# Define an Enum to represent the new cluster labels
-
-
-class ClusterName(Enum):
-    UI_UX_TESTING = "UI/UX Testing and Technical Adjustments"
-    CODE_REFACTORING = "Code Refactoring and Conventions"
-    POSITIVE_FEEDBACK = "Positive Feedback and Follow-ups"
-    MINOR_FIXES = "Minor Fixes and Nitpicks"
-    TASK_COMPLETION = "Task Completion"
-    CODE_IMPROVEMENTS = "Code Clarifications and Improvements"
-    TECHNICAL_ISSUES = "Technical Issues and Questions"
-
-# ClusterLabel class
-
-
-class ClusterLabel:
-    def __init__(self, cluster_num: int, cluster_name: ClusterName, qualitative_score: str):
-        """
-        Initializes a ClusterLabel instance with a qualitative score.
-
-        Args:
-            cluster_num (int): The cluster number.
-            cluster_name (ClusterName): The label (Enum) associated with the cluster.
-            qualitative_score (str): The qualitative score of the cluster (e.g., "low", "medium", "high").
-        """
-        self.cluster_num = cluster_num
-        self.cluster_name = cluster_name
-        self.qualitative_score = qualitative_score
-
-    def __str__(self):
-        """
-        Returns a human-readable string representation of the ClusterLabel instance.
-        """
-        return f"Cluster {self.cluster_num}: {self.cluster_name.value} (Qualitative Score: {self.qualitative_score})"
-
-    @staticmethod
-    def get_label_from_cluster(cluster_num: int):
-        """
-        Maps a cluster number to a ClusterLabel instance with the appropriate label and qualitative score.
-
-        Args:
-            cluster_num (int): The cluster number.
-
-        Returns:
-            ClusterLabel: The corresponding label for the given cluster number.
-        """
-        cluster_mapping = {
-            0: {"label": ClusterName.UI_UX_TESTING, "qualitative_score": "high"},
-            1: {"label": ClusterName.CODE_REFACTORING, "qualitative_score": "medium"},
-            2: {"label": ClusterName.POSITIVE_FEEDBACK, "qualitative_score": "medium"},
-            3: {"label": ClusterName.MINOR_FIXES, "qualitative_score": "high"},
-            4: {"label": ClusterName.TASK_COMPLETION, "qualitative_score": "low"},
-            5: {"label": ClusterName.CODE_IMPROVEMENTS, "qualitative_score": "high"},
-            6: {"label": ClusterName.TECHNICAL_ISSUES, "qualitative_score": "high"}
-        }
-
-        # Get the cluster name and qualitative score from the mapping
-        cluster_info = cluster_mapping.get(cluster_num)
-        if cluster_info is None:
-            raise ValueError(f"Invalid cluster number: {cluster_num}")
-
-        # Return a ClusterLabel instance
-        return ClusterLabel(cluster_num, cluster_info['label'], cluster_info['qualitative_score'])
+# the number of samples to use from each cluster when querying the LLM
+NUM_SAMPLES_PER_CLUSTER = 25
 
 
 class ClusteringManager:
-    def __init__(self, embeddings: List[Dict[str, Any]]):
+    def __init__(self, df: pd.DataFrame):
         """
-        Initializes the ClusteringManager with a list of embeddings and converts them to a NumPy array.
+        Initializes the ClusteringManager with a DataFrame of embeddings.
 
         Args:
-            embeddings (List[Dict[str, Any]]): List of dictionaries or lists containing embeddings.
+            df (pd.DataFrame): DataFrame containing embeddings and metadata.
         """
-        # Use the utility method from ElOpenAI to convert embeddings to a NumPy array
+        # Store the embeddings and texts directly as attributes
+        self.df = df
+
+        # Extract the embeddings as a NumPy array
         self.embeddings = ElOpenAI.convert_embeddings_to_numeric_array(
-            embeddings)
+            df.to_dict(orient='records'))
 
         # Ensure embeddings have the right dimensionality
         if self.embeddings.ndim != 2:
             raise ValueError(
                 "Embeddings should be a 2D array where each row is an embedding vector.")
 
-        # Store the original texts for labeling the plot
-        self.texts = [e['text'] for e in embeddings]
+        # Store the original text strings for labeling the plot
+        self.texts = df['text'].tolist()
 
     def kmeans_clustering(self, reduced_embeddings, n_clusters: int = 7) -> List[int]:
         """
@@ -131,7 +74,7 @@ class ClusteringManager:
         labels = agglomerative.fit_predict(reduced_embeddings)
         return labels
 
-    def reduce_with_pca(self, n_components: int = 50):
+    def reduce_with_pca(self, n_components: int = 100):
         """Reduce dimensionality using PCA for clustering."""
         """
         # PCA Dimensionality Reduction Summary
@@ -224,157 +167,86 @@ class ClusteringManager:
 
         return test_results
 
-    def add_cluster_details_to_embeddings(self, embeddings: List[Dict[str, Any]], labels: List[int]):
-        """
-        Adds cluster details (cluster number, name, and qualitative score) to each embedding dictionary.
-
-        Args:
-            embeddings (List[Dict[str, Any]]): The list of embeddings with metadata.
-            labels (List[int]): The cluster labels returned from the clustering method.
-        """
-        num_embeddings: int = len(embeddings)
-        for i, embedding_data in enumerate(embeddings):
-            print(f"\r\tAdding cluster details to embedding {
-                  i + 1} of {num_embeddings}", end="")
-            cluster_num = labels[i]
-            # Get the cluster label instance (with the name and qualitative score)
-            cluster_label = ClusterLabel.get_label_from_cluster(cluster_num)
-
-            # Add cluster details to the embedding data
-            embedding_data['cluster_num'] = cluster_label.cluster_num
-            embedding_data['cluster_name'] = cluster_label.cluster_name.value
-            embedding_data['qualitative_score'] = cluster_label.qualitative_score
-        print("\n.")
-
-        return embeddings
-
-    def test_cluster_with_llm(self, cluster_num: int, list_texts: List[str], openai_client: ElOpenAI):
-        """
-        Test a given cluster by asking the LLM (via OpenAI API) to check the cluster name and provide a recommendation.
-
-        Args:
-            cluster_num (int): The number of the cluster to test.
-            list_texts (List[str]): A list of text strings representing the contents of the cluster.
-            openai_client (ElOpenAI): The OpenAI client to send the prompt to.
-
-        Returns:
-            ClusterNameStructuredOutput: The structured response from the LLM containing the recommended cluster name.
-        """
-        # Get the cluster name from the static mapping
-        cluster_label = ClusterLabel.get_label_from_cluster(cluster_num)
-
-        # Call the OpenAI client to test the cluster with LLM
-        structured_output = openai_client.test_cluster_with_llm(
-            cluster_name_to_check=cluster_label.cluster_name.value,
-            list_texts=list_texts
-        )
-
-        # Return the structured output
-        return structured_output
-
-    def test_clusters(self, embeddings: List[Dict[str, Any]], kmeans_labels: List[int], openai_client: ElOpenAI):
-        """
-        Test clusters by sampling 5 comments from each cluster and calling test_cluster_with_llm.
-
-        Args:
-            embeddings (List[Dict[str, Any]]): List of embeddings with metadata.
-            kmeans_labels (List[int]): List of cluster labels.
-            openai_client (ElOpenAI): The OpenAI client to use for sending the LLM prompt.
-        """
-        # Step 1: Convert the embeddings to a Pandas DataFrame
-        df = pd.DataFrame(embeddings)
-
-        # Add the K-Means labels to the DataFrame
-        df['cluster_num'] = kmeans_labels
-
-        # Step 2: Loop through each cluster and sample 5 comments
-        unique_clusters = df['cluster_num'].unique()
-
-        for cluster_num in unique_clusters:
-            # Sample 5 comments from this cluster
-            cluster_sample = df[df['cluster_num'] == cluster_num].sample(5)
-
-            # Convert the sample to a list of text strings
-            list_texts = cluster_sample['text'].tolist()
-
-            # Call test_cluster_with_llm for this cluster
-            result = self.test_cluster_with_llm(
-                cluster_num, list_texts, openai_client)
-
-            # Output the result for inspection (you can store it later if needed)
-            print(f"Cluster {cluster_num}: Recommended Cluster Name: {
-                  result.recommended_cluster_name}")
-
-        print("Cluster testing with LLM complete.")
-
-    def name_clusters_with_llm(self, embeddings: List[Dict[str, Any]], kmeans_labels: List[int], openai_client: ElOpenAI):
+    def name_clusters_with_llm(self, df: pd.DataFrame, kmeans_labels: List[int], openai_client: ElOpenAI):
         """
         Name clusters by sampling comments from each cluster and asking the LLM to suggest a name.
 
         Args:
-            embeddings (List[Dict[str, Any]]): List of embeddings with metadata.
+            df (pd.DataFrame): The DataFrame containing embeddings and metadata.
             kmeans_labels (List[int]): List of cluster labels.
             openai_client (ElOpenAI): The OpenAI client to use for querying the LLM.
 
         Returns:
-            List[Dict[str, Any]]: The embeddings updated with LLM-suggested cluster names.
+            pd.DataFrame: The updated DataFrame with LLM-suggested cluster names and quality scores.
         """
-        # Step 1: Convert embeddings to a Pandas DataFrame
-        df = pd.DataFrame(embeddings)
-
         # Add the cluster numbers to the DataFrame
         df['cluster_num'] = kmeans_labels
 
-        # Initialize a dictionary to store cluster names suggested by the LLM
+        # Initialize dictionaries to store LLM-suggested cluster names and quality scores
         cluster_name_mapping = {}
+        cluster_score_mapping = {}
 
-        # Step 2: Loop through each cluster and query the LLM for a cluster name
+        # Step 2: Get the model's token limit from the LLM token limits
+        max_tokens = openai_client.get_llm_token_limit()
+
+        # Step 3: Loop through each cluster and query the LLM for a cluster name and quality score
         unique_clusters = df['cluster_num'].unique()
         for cluster_num in unique_clusters:
-            # Sample 5 comments from the cluster
-            cluster_sample = df[df['cluster_num'] == cluster_num].sample(5)
+            # Sample comments from the cluster (up to NUM_SAMPLES_PER_CLUSTER)
+            cluster_sample = df[df['cluster_num'] == cluster_num].sample(
+                min(NUM_SAMPLES_PER_CLUSTER, len(df[df['cluster_num'] == cluster_num])))
             list_texts = cluster_sample['text'].tolist()
 
-            # Query the LLM to suggest a name for the cluster
-            result = openai_client.test_cluster_with_llm(
-                cluster_name_to_check=f"Cluster {cluster_num}",
+            # Count tokens and check if we exceed the model's limit
+            total_tokens = sum([openai_client.count_tokens(text)
+                               for text in list_texts])
+            print(f"Cluster {cluster_num}: Total Tokens = {total_tokens}")
+
+            if total_tokens > max_tokens:
+                print(f"Warning: Token limit exceeded for cluster {
+                      cluster_num}. Reducing comments.")
+                reduction_fraction = max_tokens / total_tokens
+                reduced_num_samples = int(
+                    NUM_SAMPLES_PER_CLUSTER * reduction_fraction)
+                print(f"Reducing from {NUM_SAMPLES_PER_CLUSTER} comments to {
+                      reduced_num_samples} comments.")
+                list_texts = list_texts[:reduced_num_samples]
+
+            # Query the LLM to suggest a name and quality score for the cluster
+            cluster_name_result: ClusterNameStructuredOutput = openai_client.name_cluster(
+                cluster_number=f"Cluster {cluster_num}",
                 list_texts=list_texts
             )
 
-            # Store the suggested name for the cluster
-            cluster_name_mapping[cluster_num] = result.recommended_cluster_name
+            # Store the suggested name and quality score for the cluster
+            cluster_name_mapping[cluster_num] = cluster_name_result.suggested_cluster_name
+            cluster_score_mapping[cluster_num] = cluster_name_result.quality_score
             print(f"Cluster {cluster_num}: Suggested Name: {
-                  result.recommended_cluster_name}")
+                  cluster_name_result.suggested_cluster_name}; Quality Score: {cluster_name_result.quality_score}")
 
-        # Step 3: Apply the LLM-suggested cluster names to the embeddings
+        # Step 4: Apply the LLM-suggested cluster names and quality scores to the DataFrame
         df['cluster_name'] = df['cluster_num'].map(cluster_name_mapping)
+        df['quality_score'] = df['cluster_num'].map(cluster_score_mapping)
 
-        # Return the updated list of embeddings with cluster names
-        return df.to_dict(orient='records')
+        # Return the updated DataFrame
+        return df
 
 
 if __name__ == "__main__":
-    filename = "review_embeddings.csv"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Append the timestamp to the filename
+    filename = f"code_review_clusters_{timestamp}.csv"
+    df: pd.DataFrame = pd.DataFrame()
 
-    embeddings = []
-
-    # Check if the CSV file exists
+    # Load the DataFrame from the CSV file (if it exists)
     if os.path.exists(filename):
         print(f"Loading embeddings from {filename}...")
 
         try:
-            # Use Pandas to read the CSV file
             df = pd.read_csv(filename)
 
             # Convert 'embedding' string back to a list of floats (if necessary)
             df['embedding'] = df['embedding'].apply(lambda emb: eval(emb))
-
-            # Convert the DataFrame back to a list of dictionaries (if needed)
-            embeddings = df.to_dict(orient='records')
-
-            if len(embeddings) == 0:
-                print(f"No embeddings found in {
-                      filename}. Proceeding to generate new embeddings.")
 
         except IOError as e:
             print(f"Error reading embeddings from CSV: {e}")
@@ -384,16 +256,17 @@ if __name__ == "__main__":
             print(f"An error occurred while loading embeddings: {e}")
             exit(1)
 
-    # If no embeddings were loaded from the file, generate new embeddings
-    if len(embeddings) == 0:
+    # If no embeddings were loaded, generate new embeddings
+    if df.empty:
         print(f"{filename} not found or empty. Generating new embeddings...")
 
         try:
-            # Assume EmbeddingLabel is a class that generates embeddings
-            embedding_label: EmbeddingLabel = EmbeddingLabel()
-            embeddings = embedding_label.generate_review_embeddings(limit=250)
+            embedding_label = EmbeddingLabel()
+            embeddings = embedding_label.generate_review_embeddings(limit=500)
 
-            if len(embeddings) == 0:
+            df = pd.DataFrame(embeddings)
+
+            if df.empty:
                 raise ValueError("No embeddings were generated.")
 
             print(f"New embeddings generated.")
@@ -402,39 +275,27 @@ if __name__ == "__main__":
             print(f"An error occurred while generating embeddings: {e}")
             exit(1)
 
-    # Initialize the ClusteringManager with embeddings
-    manager = ClusteringManager(embeddings)
+    # Initialize the ClusteringManager with the DataFrame
+    manager = ClusteringManager(df)
 
     # Step 1: Reduce dimensionality to 50 dimensions for clustering
-    reduced_embeddings = manager.reduce_with_pca(n_components=50)
+    reduced_embeddings = manager.reduce_with_pca(n_components=100)
 
     # Step 2: Run K-Means clustering and get the labels (array of integers)
     kmeans_labels = manager.kmeans_clustering(reduced_embeddings, n_clusters=7)
 
-    # Step 3: Further reduce dimensionality to 2 dimensions for plotting
-    # reduced_embeddings_2d = manager.reduce_with_pca(n_components=2)
-
-    # Step 4: Plot the K-Means clustering result
-    # manager.plot_clusters(reduced_embeddings_2d,
-    #                       kmeans_labels, "K-Means Clustering")
-
     # Initialize the OpenAI client
     openai_client = ElOpenAI()
 
-    # Step 3: Name the clusters using LLM
-    embeddings_with_clusters = manager.name_clusters_with_llm(
-        embeddings, kmeans_labels, openai_client)
+    # Step 3: Name the clusters using LLM and update the DataFrame
+    df = manager.name_clusters_with_llm(df, kmeans_labels, openai_client)
 
-    # Step 4: Convert the embeddings_with_clusters to a Pandas DataFrame
-    df = pd.DataFrame(embeddings_with_clusters)
+    # Step 4: Drop the 'user' column if it exists
+    df = df.drop(columns=['user', 'dimensions'], errors='ignore')
 
-    # Step 5: Drop the 'user' column if it exists
-    df = df.drop(columns=['user'], errors='ignore')
+    # df['embedding'] = df['embedding'].apply(lambda emb: str(emb))
 
-    # Step 6: Convert 'embedding' list to string for CSV saving
-    df['embedding'] = df['embedding'].apply(lambda emb: str(emb))
-
-    # Step 7: Save DataFrame to CSV
+    # Step 6: Save the updated DataFrame to CSV
     df.to_csv(filename, index=False)
 
     print(f"CSV successfully saved to {filename}.")
