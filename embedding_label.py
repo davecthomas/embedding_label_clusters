@@ -7,7 +7,7 @@ from el_snowflake import ElSnowflake
 
 class EmbeddingLabel:
     def __init__(self):
-        self.openai_client = ElOpenAI(dimensions=ElOpenAI.DIMENSIONS_MIN)
+        self.openai_client = ElOpenAI()
         self.snowflake_client = ElSnowflake()
 
     def generate_review_embeddings(self, limit: int = 100) -> List[List[float]]:
@@ -20,12 +20,15 @@ class EmbeddingLabel:
         df: pd.DataFrame = self.snowflake_client.get_review_comments(
             limit=limit)
         # loop through dataframe and generate_embeddings
+        num_rows: int = len(df)
         for index, row in df.iterrows():
+            print(f"\r\tProcessing row {index + 1} of {num_rows}", end="")
             text = row["body"]
             embedding = self.openai_client.generate_embedding(text)
             if embedding:
                 row["embedding"] = embedding
                 list_of_embeddings.append(embedding)
+        print("\n.")
         return list_of_embeddings
 
 

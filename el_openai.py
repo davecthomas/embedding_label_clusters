@@ -11,11 +11,30 @@ from typing import List, Dict, Any
 from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse
 import tiktoken
 import csv
+import ast  # Import the ast module to safely evaluate string representations of lists
+from pydantic import BaseModel, field_validator
+
+
+class ClusterNameStructuredOutput(BaseModel):
+    cluster_name_to_check: str
+    recommended_cluster_name: str
+
+    @field_validator('cluster_name_to_check', 'recommended_cluster_name', mode='before')
+    def check_fields(cls, value, info):
+        """
+        Validate that 'cluster_name_to_check' and 'recommended_cluster_name' are properly set.
+        """
+        if info.field_name == 'cluster_name_to_check':
+            if not isinstance(value, str) or value == "":
+                raise ValueError("Invalid or missing 'cluster_name_to_check'")
+        elif info.field_name == 'recommended_cluster_name':
+            if not isinstance(value, str) or value == "":
+                raise ValueError(
+                    "Invalid or missing 'recommended_cluster_name'")
+        return value
 
 
 class ElOpenAI:
-    DIMENSIONS_MIN = 256
-    DIMENSIONS_DEFAULT = 512
     DIMENSIONS_GEN3_OPENAI = 1536
 
     # Static list of embedding models with their settings
@@ -26,7 +45,7 @@ class ElOpenAI:
 
     embedding_model_default = "text-embedding-3-small"
 
-    def __init__(self, model: str = "text-embedding-3-small", dimensions: int = 512):
+    def __init__(self, model: str = "text-embedding-3-small", dimensions: int = DIMENSIONS_GEN3_OPENAI):
         """
         Initializes the ElOpenAI class, setting the model and dimensions.
 
@@ -184,6 +203,40 @@ class ElOpenAI:
             print(f"An error occurred while sending the prompt: {e}")
             raise
 
+    def test_cluster_with_llm(self, cluster_name_to_check: str, list_texts: List) -> ClusterNameStructuredOutput:
+        """
+        Uses OpenAI's chat completions API to extract the exclusion term from a sentence using structured outputs.
+
+        Args:
+            prompt, system_prompt (str): The prompt and system prompt strings.
+
+        Returns:
+            structured response class
+        """
+        system_prompt = "you are a data cluster naming expert. You can look at groups of strings and either agree with the given cluster name or recommend a better one."
+        prompt = f"Given the cluster name '{cluster_name_to_check}', and the associated text strings {
+            list_texts} what is the recommended cluster name?"
+        # Prepare the input messages
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            # Use the chat completion API with structured output parsing using Pydantic
+            completion = self.client.beta.chat.completions.parse(
+                model=self.completions_model,
+                messages=messages,
+                response_format=ClusterNameStructuredOutput,
+            )
+
+            # Validate and return the structured response
+            return ClusterNameStructuredOutput(**completion.choices[0].message.parsed.model_dump())
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return ClusterNameStructuredOutput()
+
     def test_openai_connectivity(self, list_text: List[str] = ["Hello, World!"]) -> bool:
         """
         Tests connectivity to the OpenAI API by generating embeddings for the provided text.
@@ -207,7 +260,6 @@ class ElOpenAI:
             print(f"OpenAI API connectivity test failed with error: {e}")
             return False
 
-    @staticmethod
     def save_to_csv(embeddings: List[Dict[str, Any]], filename: str):
         """
         Saves a list of embeddings to a CSV file.
@@ -220,8 +272,8 @@ class ElOpenAI:
             raise ValueError(
                 "Embeddings should be a non-empty list of dictionaries.")
 
-        # Define the header based on the keys in the first dictionary
-        header = ['text', 'embedding', 'dimensions', 'user']
+        # Dynamically generate the header from the keys of the first dictionary
+        header = embeddings[0].keys()
 
         try:
             with open(filename, mode='w', newline='') as file:
@@ -258,11 +310,25 @@ class ElOpenAI:
                 "Embeddings should be a list of dictionaries or a list of lists.")
 
         # Check if it's a list of dictionaries with the 'embedding' key
-        if all(isinstance(e, dict) and 'embedding' in e for e in embeddings):
-            return np.array([np.array(e['embedding'], dtype=float) for e in embeddings])
+        embedding_list = []
+        for e in embeddings:
+            embedding_str = e.get('embedding')
+            if isinstance(embedding_str, str):
+                try:
+                    # Try to parse the string representation of the list
+                    embedding_list.append(
+                        np.array(ast.literal_eval(embedding_str), dtype=float))
+                except (ValueError, SyntaxError) as eval_error:
+                    # Handle cases where the string can't be evaluated
+                    print(f"Error parsing embedding for comment '{
+                          e.get('text')}': {eval_error}")
+                    continue
+            else:
+                # If it's not a string, assume it's already a list of floats
+                embedding_list.append(np.array(embedding_str, dtype=float))
 
-        # If it's already a list of lists, convert directly to NumPy array
-        return np.array(embeddings, dtype=float)
+        # Convert to a NumPy array
+        return np.array(embedding_list)
 
 
 if __name__ == "__main__":
