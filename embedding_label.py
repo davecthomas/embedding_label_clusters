@@ -10,26 +10,34 @@ class EmbeddingLabel:
         self.openai_client = ElOpenAI()
         self.snowflake_client = ElSnowflake()
 
-    def generate_review_embeddings(self, limit: int = 100) -> List[List[float]]:
+    def generate_review_embeddings(self, limit: int = 100) -> pd.DataFrame:
         """
-        Generates embeddings for review comments and stores them in a dataframe.
+        Generates embeddings for review comments and stores them in a DataFrame.
+
         Returns:
-            List[List[float]]: A list of embeddings for review comments.
+            pd.DataFrame: A DataFrame with the original review comments and their embeddings.
         """
-        list_of_embeddings: List[List[float]] = []
+        # Fetch the review comments as a DataFrame from Snowflake
         df: pd.DataFrame = self.snowflake_client.get_review_comments(
             limit=limit)
-        # loop through dataframe and generate_embeddings
+
+        # Loop through the DataFrame and generate embeddings for each comment
         num_rows: int = len(df)
+        embeddings: List[List[float]] = []
         for index, row in df.iterrows():
-            print(f"\r\tProcessing row {index + 1} of {num_rows}", end="")
+            print(f"\r\tGenerating embeddings from review {
+                  index + 1} of {num_rows}", end="")
             text = row["body"]
             embedding = self.openai_client.generate_embedding(text)
             if embedding:
-                row["embedding"] = embedding
-                list_of_embeddings.append(embedding)
+                # Only extract the 'embedding' key (list of floats) and append to the list
+                embeddings.append(embedding.get("embedding", None))
+
+        # Add the embeddings to the DataFrame as a new column
+        df['embedding'] = embeddings
         print("\n.")
-        return list_of_embeddings
+
+        return df
 
 
 if __name__ == "__main__":

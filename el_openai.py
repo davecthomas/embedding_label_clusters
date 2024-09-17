@@ -9,6 +9,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse
+import pandas as pd
 import tiktoken
 import csv
 import ast  # Import the ast module to safely evaluate string representations of lists
@@ -337,39 +338,41 @@ class ElOpenAI:
             print(f"An error occurred while saving embeddings to CSV: {e}")
 
     @staticmethod
-    def convert_embeddings_to_numeric_array(embeddings: List[Dict[str, Any]]) -> np.ndarray:
+    def convert_embeddings_to_numeric_array(df: pd.DataFrame) -> np.ndarray:
         """
-        Converts a list of dictionaries containing OpenAI embeddings into a NumPy array.
+        Converts a DataFrame containing dictionaries of OpenAI embeddings (with metadata) 
+        into a NumPy array of embeddings.
 
         Args:
-            embeddings (List[Dict[str, Any]]): List of dictionaries where each dictionary contains an 'embedding' key.
+            df (pd.DataFrame): DataFrame where each row contains an 'embedding' column,
+                            which is a dictionary with metadata.
 
         Returns:
             np.ndarray: A 2D NumPy array where each row is a list of floats representing an embedding.
         """
-        if not isinstance(embeddings, list):
-            raise TypeError(
-                "Embeddings should be a list of dictionaries or a list of lists.")
+        if 'embedding' not in df.columns:
+            raise KeyError("'embedding' column is missing from the DataFrame.")
 
-        # Check if it's a list of dictionaries with the 'embedding' key
+        # Initialize an empty list to store the embeddings
         embedding_list = []
-        for e in embeddings:
-            embedding_str = e.get('embedding')
-            if isinstance(embedding_str, str):
-                try:
-                    # Try to parse the string representation of the list
-                    embedding_list.append(
-                        np.array(ast.literal_eval(embedding_str), dtype=float))
-                except (ValueError, SyntaxError) as eval_error:
-                    # Handle cases where the string can't be evaluated
-                    print(f"Error parsing embedding for comment '{
-                          e.get('text')}': {eval_error}")
-                    continue
-            else:
-                # If it's not a string, assume it's already a list of floats
-                embedding_list.append(np.array(embedding_str, dtype=float))
 
-        # Convert to a NumPy array
+        for index, row in df.iterrows():
+            print(f"\r\tConverting embedding to numeric array for clustering {
+                  index}", end="")
+
+            # Get the actual embedding (list of floats)
+            embedding_value = row['embedding']
+
+            if embedding_value is not None:
+                # Convert to NumPy array
+                embedding_list.append(np.array(embedding_value, dtype=float))
+            else:
+                print(f"\nWarning: Skipping row {
+                      index} due to missing embedding.")
+
+        print("\n.")
+
+        # Convert the list of embeddings to a 2D NumPy array
         return np.array(embedding_list)
 
 

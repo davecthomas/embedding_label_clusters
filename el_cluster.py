@@ -1,22 +1,24 @@
 from datetime import datetime
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import pandas as pd
 import os
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from el_openai import ClusterNameStructuredOutput, ElOpenAI
+from el_snowflake import ElSnowflake
 from embedding_label import EmbeddingLabel
 import hdbscan
 import umap
 import numpy as np
 from typing import List, Dict, Any
-import matplotlib.pyplot as plt
+
 
 from enum import Enum
 
 # the number of samples to use from each cluster when querying the LLM
 NUM_SAMPLES_PER_CLUSTER = 25
+MAX_REVIEWS_TO_CLASSIFY = 100
 
 
 class ClusteringManager:
@@ -31,16 +33,15 @@ class ClusteringManager:
         self.df = df
 
         # Extract the embeddings as a NumPy array
-        self.embeddings = ElOpenAI.convert_embeddings_to_numeric_array(
-            df.to_dict(orient='records'))
+        self.embeddings = ElOpenAI.convert_embeddings_to_numeric_array(df)
 
         # Ensure embeddings have the right dimensionality
         if self.embeddings.ndim != 2:
             raise ValueError(
                 "Embeddings should be a 2D array where each row is an embedding vector.")
 
-        # Store the original text strings for labeling the plot
-        self.texts = df['text'].tolist()
+        # Store the original text (unused unless we are plotting)
+        # self.texts = df['body'].tolist()
 
     def kmeans_clustering(self, reduced_embeddings, n_clusters: int = 7) -> List[int]:
         """
@@ -107,65 +108,65 @@ class ClusteringManager:
         reduced_embeddings = reducer.fit_transform(self.embeddings)
         return reduced_embeddings
 
-    def plot_clusters(self, reduced_embeddings: np.ndarray, labels: List[int], title: str):
-        """Plots the clusters after dimensionality reduction with appropriate labels and titles."""
-        plt.figure(figsize=(10, 7))
-        scatter = plt.scatter(
-            reduced_embeddings[:, 0], reduced_embeddings[:, 1], c=labels, cmap='Spectral', s=50)
-        plt.colorbar(scatter)
-        plt.title(title)
+    # def plot_clusters(self, reduced_embeddings: np.ndarray, labels: List[int], title: str):
+    #     """Plots the clusters after dimensionality reduction with appropriate labels and titles."""
+    #     plt.figure(figsize=(10, 7))
+    #     scatter = plt.scatter(
+    #         reduced_embeddings[:, 0], reduced_embeddings[:, 1], c=labels, cmap='Spectral', s=50)
+    #     plt.colorbar(scatter)
+    #     plt.title(title)
 
-        # Add some annotations to map dots to reviews
-        for i in range(len(reduced_embeddings)):
-            plt.annotate(self.texts[i][:20],  # Annotate the first 20 characters of the review
-                         (reduced_embeddings[i, 0], reduced_embeddings[i, 1]),
-                         fontsize=8, alpha=0.7)
+    #     # Add some annotations to map dots to reviews
+    #     for i in range(len(reduced_embeddings)):
+    #         plt.annotate(self.texts[i][:20],  # Annotate the first 20 characters of the review
+    #                      (reduced_embeddings[i, 0], reduced_embeddings[i, 1]),
+    #                      fontsize=8, alpha=0.7)
 
-    def test_clustering_methods(self, reduced_embeddings):
-        test_results = {}
+    # def test_clustering_methods(self, reduced_embeddings):
+    #     test_results = {}
 
-        # K-Means clustering
-        num_clusters: int = 7
-        kmeans_labels = self.kmeans_clustering(
-            reduced_embeddings, n_clusters=num_clusters)
-        test_results['kmeans'] = kmeans_labels
-        self.plot_clusters(reduced_embeddings,
-                           kmeans_labels, "K-Means Clustering")
+    #     # K-Means clustering
+    #     num_clusters: int = 7
+    #     kmeans_labels = self.kmeans_clustering(
+    #         reduced_embeddings, n_clusters=num_clusters)
+    #     test_results['kmeans'] = kmeans_labels
+    #     self.plot_clusters(reduced_embeddings,
+    #                        kmeans_labels, "K-Means Clustering")
 
-        # Assuming 'kmeans_labels' contains the cluster labels and 'texts' contains the corresponding comments
-        for cluster_num in range(num_clusters):  # Loop over the clusters
-            print(f"Cluster {cluster_num}:")
-            count = 0  # To keep track of how many comments we've printed for each cluster
-            for i, label in enumerate(kmeans_labels):
-                if label == cluster_num:
-                    print(f"  Comment: {self.texts[i]}")  # Print the comment
-                    count += 1
-                    if count >= 10:  # Stop after 10 comments
-                        break
+    #     # Assuming 'kmeans_labels' contains the cluster labels and 'texts' contains the corresponding comments
+    #     for cluster_num in range(num_clusters):  # Loop over the clusters
+    #         print(f"Cluster {cluster_num}:")
+    #         count = 0  # To keep track of how many comments we've printed for each cluster
+    #         for i, label in enumerate(kmeans_labels):
+    #             if label == cluster_num:
+    #                 print(f"  Comment: {self.texts[i]}")  # Print the comment
+    #                 count += 1
+    #                 if count >= 10:  # Stop after 10 comments
+    #                     break
 
-        # # DBSCAN clustering
-        # dbscan_labels = self.dbscan_clustering(reduced_embeddings)
-        # test_results['dbscan'] = dbscan_labels
-        # self.plot_clusters(reduced_embeddings,
-        #                    dbscan_labels, "DBSCAN Clustering")
+    #     # # DBSCAN clustering
+    #     # dbscan_labels = self.dbscan_clustering(reduced_embeddings)
+    #     # test_results['dbscan'] = dbscan_labels
+    #     # self.plot_clusters(reduced_embeddings,
+    #     #                    dbscan_labels, "DBSCAN Clustering")
 
-        # # HDBSCAN clustering
-        # hdbscan_labels = self.hdbscan_clustering(reduced_embeddings)
-        # test_results['hdbscan'] = hdbscan_labels
-        # self.plot_clusters(reduced_embeddings,
-        #                    hdbscan_labels, "HDBSCAN Clustering")
+    #     # # HDBSCAN clustering
+    #     # hdbscan_labels = self.hdbscan_clustering(reduced_embeddings)
+    #     # test_results['hdbscan'] = hdbscan_labels
+    #     # self.plot_clusters(reduced_embeddings,
+    #     #                    hdbscan_labels, "HDBSCAN Clustering")
 
-        # # Agglomerative clustering
-        # agglomerative_labels = self.agglomerative_clustering(
-        #     reduced_embeddings)
-        # test_results['agglomerative'] = agglomerative_labels
-        # self.plot_clusters(reduced_embeddings,
-        #                    agglomerative_labels, "Agglomerative Clustering")
+    #     # # Agglomerative clustering
+    #     # agglomerative_labels = self.agglomerative_clustering(
+    #     #     reduced_embeddings)
+    #     # test_results['agglomerative'] = agglomerative_labels
+    #     # self.plot_clusters(reduced_embeddings,
+    #     #                    agglomerative_labels, "Agglomerative Clustering")
 
-        # Display all plots at once
-        plt.show()
+    #     # Display all plots at once
+    #     plt.show()
 
-        return test_results
+    #     return test_results
 
     def name_clusters_with_llm(self, df: pd.DataFrame, kmeans_labels: List[int], openai_client: ElOpenAI):
         """
@@ -195,7 +196,7 @@ class ClusteringManager:
             # Sample comments from the cluster (up to NUM_SAMPLES_PER_CLUSTER)
             cluster_sample = df[df['cluster_num'] == cluster_num].sample(
                 min(NUM_SAMPLES_PER_CLUSTER, len(df[df['cluster_num'] == cluster_num])))
-            list_texts = cluster_sample['text'].tolist()
+            list_texts = cluster_sample['body'].tolist()
 
             # Count tokens and check if we exceed the model's limit
             total_tokens = sum([openai_client.count_tokens(text)
@@ -262,9 +263,8 @@ if __name__ == "__main__":
 
         try:
             embedding_label = EmbeddingLabel()
-            embeddings = embedding_label.generate_review_embeddings(limit=500)
-
-            df = pd.DataFrame(embeddings)
+            df: pd.DataFrame = embedding_label.generate_review_embeddings(
+                limit=MAX_REVIEWS_TO_CLASSIFY)
 
             if df.empty:
                 raise ValueError("No embeddings were generated.")
@@ -299,3 +299,13 @@ if __name__ == "__main__":
     df.to_csv(filename, index=False)
 
     print(f"CSV successfully saved to {filename}.")
+    # Step 7: Summarize how many reviews per cluster
+    cluster_summary = df['cluster_name'].value_counts()
+    print("\nCluster Review Summary:")
+    print(cluster_summary)
+
+    print("Storing the review classifications in Snowflake so we have a training data set...")
+    snowflake_client = ElSnowflake()
+    # Store the classifications and comments in Snowflake
+    snowflake_client.store_classification(df)
+    print("\nDone. Review classifications stored in Snowflake. Check the 'pr_review_comments_training' table.")

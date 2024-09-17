@@ -98,16 +98,8 @@ class ElSnowflake:
             return False
 
     def get_review_comments(self, limit: int = 100) -> pd.DataFrame:
-        """Fetches review comments from Snowflake.
-         TABLE "pr_review_comments" (
-            "comment_id" BIGINT PRIMARY KEY,
-            "repo_name" VARCHAR(256),
-            "pr_number" VARCHAR(64),
-            "user_login" VARCHAR(256),
-            "body" TEXT,
-            "created_at" TIMESTAMP_NTZ
-        );
-
+        """
+        Fetches review comments from Snowflake along with the comment_id.
         """
         if limit:
             limit = f"LIMIT {limit}"
@@ -115,10 +107,12 @@ class ElSnowflake:
             conn = self.get_snowflake_connection()
             query = f"""
                 SELECT
+                    "comment_id",   -- Add comment_id to fetch
                     "repo_name",
                     "pr_number",
                     "user_login",
-                    "body"
+                    "body",
+                    "created_at"
                 FROM
                     "pr_review_comments"
                 WHERE
@@ -130,6 +124,47 @@ class ElSnowflake:
         except Exception as e:
             print(f"Error fetching pr_review_comments: {e}")
             return None
+
+    def store_classification(self, df: pd.DataFrame):
+        """
+        Stores classification (cluster name) and comment body in the training table based on comment_id.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), and the comment body.
+        """
+        try:
+            conn = self.get_snowflake_connection()
+
+            # Prepare the INSERT or UPDATE query to store the classifications
+            for i, row in df.iterrows():
+                print(f"\r\tStoring classification {i}", end="")
+                comment_id = row['comment_id']
+                label = row['cluster_name']  # This is the cluster name (label)
+                # Include the comment body for human review of classifications
+                body = row['body']
+                try:
+                    # Merge query for Snowflake with correct SQL syntax
+                    query = f"""
+                        MERGE INTO "pr_review_comments_training" AS target
+                        USING (SELECT '{comment_id}' AS comment_id, '{label}' AS label, '{body.replace("'", "''")}' AS body) AS source
+                        ON target.comment_id = source.comment_id
+                        WHEN MATCHED THEN
+                            UPDATE SET target.label = source.label
+                        WHEN NOT MATCHED THEN
+                            INSERT (comment_id, label, body)
+                            VALUES (source.comment_id,
+                                    source.label, source.body);
+                    """
+                    # Execute the query
+                    with conn.cursor() as cur:
+                        cur.execute(query)
+                    # print(f"Classification for comment_id {comment_id} saved.")
+                except Exception as e:
+                    print(f"Error saving classification for comment_id {
+                          comment_id}: {e}")
+
+        except Exception as e:
+            print(f"Error storing classifications: {e}")
 
 
 if __name__ == "__main__":

@@ -26,5 +26,7 @@ CREATE TABLE IF NOT EXISTS "pr_review_comments_training" (
     "user_login" VARCHAR(256),
     "body" TEXT,
     "created_at" TIMESTAMP_NTZ,
-    "label" VARCHAR(50) -- this is our category column
+    "label" VARCHAR(50), -- this is our category column
+    "quality_score" INT DEFAULT NULL -- this is an optional column for quality score
+
 );
