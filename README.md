@@ -214,6 +214,7 @@ Make sure you set up your .env file before running.
 
 # Snowflake Settings
 
+```
 SNOWFLAKE_USER=
 SNOWFLAKE_ROLE=
 SNOWFLAKE_PASSWORD=
@@ -230,3 +231,4 @@ OPENAI_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_USER=
 OPENAI_COMPLETIONS_MODEL=gpt-4o-mini
+```
