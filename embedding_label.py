@@ -10,7 +10,7 @@ class EmbeddingLabel:
         self.openai_client = ElOpenAI()
         self.snowflake_client = ElSnowflake()
 
-    def generate_review_embeddings(self, limit: int = 100) -> pd.DataFrame:
+    def generate_review_embeddings(self, limit) -> pd.DataFrame:
         """
         Generates embeddings for review comments and stores them in a DataFrame.
 

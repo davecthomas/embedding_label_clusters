@@ -137,7 +137,7 @@ class ElSnowflake:
 
             # Prepare the INSERT or UPDATE query to store the classifications
             for i, row in df.iterrows():
-                print(f"\r\tStoring classification {i}", end="")
+                print(f"\r\tStoring classification {i+1}", end="")
                 comment_id = row['comment_id']
                 label = row['cluster_name']  # This is the cluster name (label)
                 # Include the comment body for human review of classifications
@@ -172,6 +172,60 @@ class ElSnowflake:
                 except Exception as e:
                     print(f"\nError saving classification for comment_id {
                           comment_id}: {e}")
+
+        except Exception as e:
+            print(f"\nError storing classifications: {e}")
+
+    def store_classification_batch(self, df: pd.DataFrame, batch_size: int = 100):
+        """
+        Stores classification (cluster name), comment body, and quality score in the training table based on comment_id.
+        This version batches the data into a single query to speed up the process.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), comment body, and quality score.
+            batch_size (int): Number of rows to include in each batch. Default is 100.
+        """
+        try:
+            conn = self.get_snowflake_connection()
+
+            # Process the DataFrame in batches
+            for start in range(0, len(df), batch_size):
+                print(f"\r\tStoring batch {
+                      start // batch_size + 1} (rows {start} to {start + len(batch_df) - 1})", end="")
+                batch_df = df.iloc[start:start + batch_size]
+
+                # Create a list of values to be inserted/updated in SQL
+                values_list = []
+                for i, row in batch_df.iterrows():
+                    comment_id = row['comment_id']
+                    label = row['cluster_name']
+                    # Handle single quotes in SQL
+                    body = row['body'].replace("'", "''")
+                    quality_score = row['quality_score']
+
+                    # Add to list (SQL friendly format)
+                    values_list.append(
+                        f"('{comment_id}', '{label.replace("'", "''")}', '{body}', {quality_score})")
+
+                # Join all rows into a single query for batch insert/merge
+                values_string = ", ".join(values_list)
+
+                # Create the batch MERGE SQL query
+                query = f"""
+                    MERGE INTO "pr_review_comments_training_test_batch" AS target
+                    USING (VALUES {values_string}) AS source("comment_id", "label", "body", "quality_score")
+                    ON target."comment_id" = source."comment_id"
+                    WHEN MATCHED THEN
+                        UPDATE SET target."label" = source."label", target."quality_score" = source."quality_score"
+                    WHEN NOT MATCHED THEN
+                        INSERT ("comment_id", "label", "body", "quality_score")
+                        VALUES (source."comment_id", source."label", source."body", source."quality_score");
+                """
+
+                # Execute the query
+                with conn.cursor() as cur:
+                    cur.execute(query)
+                print(f"\rBatch {start // batch_size + 1} completed.", end="")
 
         except Exception as e:
             print(f"\nError storing classifications: {e}")

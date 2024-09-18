@@ -1,4 +1,4 @@
-# Embedding Labels - A Cluster Exploration for Auto-Classification
+# Embedding Labels - A Generic Hybrid Approach for Model Training Using Clustering and LLM Assistance
 
 **Background: Overcoming the Human Labeling Bottleneck**
 
@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS "pr_review_comments_training" (
     "user_login" VARCHAR(256),
     "body" TEXT,
     "created_at" TIMESTAMP_NTZ,
-    "label" VARCHAR(50) -- this is our classification column
+    "label" TEXT, -- this is our classification column
+    "quality_score" INT -- since we're classifying, why not evaluate the overall quality of the cluster too?
 );
 ```
 
@@ -206,9 +207,13 @@ pip3 install -r requirements.txt
 vi .env
 ```
 
-# Run the program
+## Run the program
 
 Make sure you set up your .env file before running.
+
+```bash
+python3 el_cluster.py
+```
 
 ## Environment
 

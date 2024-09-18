@@ -13,8 +13,9 @@ import umap
 from typing import List
 
 # the number of samples to use from each cluster when querying the LLM
-NUM_SAMPLES_PER_CLUSTER = 25
-MAX_REVIEWS_TO_CLASSIFY = 200
+NUM_SAMPLES_PER_CLUSTER = 26        # Reduce this to limit LLM token usage
+# Increase this to have a bigger/more representative training data set
+MAX_REVIEWS_TO_CLASSIFY = 1500
 
 
 class ClusteringManager:
@@ -224,7 +225,7 @@ class ClusteringManager:
             cluster_score_mapping[cluster_num] = cluster_name_result.quality_score
             existing_cluster_names.append(
                 cluster_name_result.suggested_cluster_name)  # Update the list of names
-            print(f"Cluster {cluster_num}: Suggested Name: {
+            print(f"\tCluster {cluster_num}: Suggested Name: {
                   cluster_name_result.suggested_cluster_name}; Quality Score: {cluster_name_result.quality_score}")
 
         # Step 4: Apply the LLM-suggested cluster names and quality scores to the DataFrame
@@ -263,7 +264,7 @@ if __name__ == "__main__":
 
     # If no embeddings were loaded, generate new embeddings
     if df.empty:
-        print(f"Generating new embeddings...")
+        print(f"Generating embeddings...")
 
         try:
             embedding_label = EmbeddingLabel()
@@ -292,6 +293,7 @@ if __name__ == "__main__":
     openai_client = ElOpenAI()
 
     # Step 3: Name the clusters using LLM and update the DataFrame
+    print("Naming clusters using the Large Language Model...")
     df = manager.name_clusters_with_llm(df, kmeans_labels, openai_client)
 
     # Step 4: Drop the 'user' column if it exists
