@@ -127,10 +127,10 @@ class ElSnowflake:
 
     def store_classification(self, df: pd.DataFrame):
         """
-        Stores classification (cluster name) and comment body in the training table based on comment_id.
+        Stores classification (cluster name), comment body, and quality score in the training table based on comment_id.
 
         Args:
-            df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), and the comment body.
+            df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), comment body, and quality score.
         """
         try:
             conn = self.get_snowflake_connection()
@@ -142,29 +142,39 @@ class ElSnowflake:
                 label = row['cluster_name']  # This is the cluster name (label)
                 # Include the comment body for human review of classifications
                 body = row['body']
+                quality_score = row['quality_score']
+
                 try:
                     # Merge query for Snowflake with correct SQL syntax
                     query = f"""
-                        MERGE INTO "pr_review_comments_training" AS target
-                        USING (SELECT '{comment_id}' AS comment_id, '{label}' AS label, '{body.replace("'", "''")}' AS body) AS source
-                        ON target.comment_id = source.comment_id
-                        WHEN MATCHED THEN
-                            UPDATE SET target.label = source.label
-                        WHEN NOT MATCHED THEN
-                            INSERT (comment_id, label, body)
-                            VALUES (source.comment_id,
-                                    source.label, source.body);
-                    """
+                         MERGE INTO "pr_review_comments_training" AS target
+                         USING (
+                             SELECT
+                                 '{comment_id}' AS "comment_id",
+                                 '{label.replace("'", "''")}' AS "label",
+                                 '{body.replace("'", "''")}' AS "body",
+                                 {quality_score} AS "quality_score"
+                         ) AS source
+                         ON target."comment_id" = source."comment_id"
+                         WHEN MATCHED THEN
+                             UPDATE SET target."label" = source."label", target."quality_score" = source."quality_score"
+                         WHEN NOT MATCHED THEN
+                             INSERT ("comment_id", "label",
+                                     "body", "quality_score")
+                             VALUES (source."comment_id", source."label",
+                                     source."body", source."quality_score");
+                     """
                     # Execute the query
                     with conn.cursor() as cur:
                         cur.execute(query)
-                    # print(f"Classification for comment_id {comment_id} saved.")
+                        # to debug this, output query.replace("\\", "")
+                        # print(f"Classification for comment_id {comment_id} saved.")
                 except Exception as e:
-                    print(f"Error saving classification for comment_id {
+                    print(f"\nError saving classification for comment_id {
                           comment_id}: {e}")
 
         except Exception as e:
-            print(f"Error storing classifications: {e}")
+            print(f"\nError storing classifications: {e}")
 
 
 if __name__ == "__main__":

@@ -230,31 +230,31 @@ class ElOpenAI:
             print(f"An error occurred while sending the prompt: {e}")
             raise
 
-    def name_cluster(self, cluster_number: int, list_texts: List) -> ClusterNameStructuredOutput:
+    def name_cluster(self, cluster_number: int, list_texts: List[str], existing_names: List[str]) -> ClusterNameStructuredOutput:
         """
         Uses OpenAI's chat completions API to suggest a name for a given cluster number based on the cluster's text comments.
 
         Args:
             cluster_number (int): The number of the cluster to name.
             list_texts (List[str]): A list of text strings representing the contents of the cluster.
+            existing_names (List[str]): A list of existing cluster names to avoid repetition.
 
         Returns:
             ClusterNameStructuredOutput: A structured response with the suggested cluster name.
         """
         # System prompt asking the LLM to suggest a name and evaluate the quality of the cluster
         system_prompt = (
-            "You are an expert in clustering and evaluating groups of text data. "
-            "Your task is to analyze a group of code review comments that belong to a particular k-means generated cluster."
-            "You are to both name and qualty score the usefulness of these comments. "
-            "Name based on the common themes or subjects found in these comments. Suggest a clear and concise name for the cluster. "
-            "Provide a quality score between 1 and 5 (1 being lowest quality, 5 being highest quality) based on the usefulness or importance of the comments."
-            "A general non-specific acknowledgment is considered lower quality and specific, actionable feedback is considered higher quality."
-        )
+            "Your task is to name a cluster of code review comments based on recurring patterns or key topics. "
+            "Avoid names similar to existing clusters and assign a quality score (1-5) based on the specificity and usefulness of the comments, "
+            "where 1 is for acknowledgements and 5 is for impactful suggestions. "
+            "Here are the existing cluster names: "
+            f"{', '.join(existing_names)}. ")
 
         # User prompt providing the cluster number and associated comments for analysis
         prompt = (
-            f"Suggest a descriptive name for cluster "
-            f"{cluster_number}, and provide a quality score, from 1-5."
+            "Suggest a descriptive name for cluster "
+            f"{cluster_number}, avoiding similarity with these existing cluster names: "
+            f"{existing_names}. "
             f"Here is a list of code review comments from this cluster to base your decision on: "
             f"{list_texts}. "
         )

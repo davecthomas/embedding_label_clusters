@@ -1,7 +1,7 @@
 from datetime import datetime
-# import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import glob
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -10,15 +10,11 @@ from el_snowflake import ElSnowflake
 from embedding_label import EmbeddingLabel
 import hdbscan
 import umap
-import numpy as np
-from typing import List, Dict, Any
-
-
-from enum import Enum
+from typing import List
 
 # the number of samples to use from each cluster when querying the LLM
 NUM_SAMPLES_PER_CLUSTER = 25
-MAX_REVIEWS_TO_CLASSIFY = 100
+MAX_REVIEWS_TO_CLASSIFY = 200
 
 
 class ClusteringManager:
@@ -187,6 +183,9 @@ class ClusteringManager:
         cluster_name_mapping = {}
         cluster_score_mapping = {}
 
+        # Step 1: Maintain a list of existing cluster names
+        existing_cluster_names = []
+
         # Step 2: Get the model's token limit from the LLM token limits
         max_tokens = openai_client.get_llm_token_limit()
 
@@ -201,7 +200,7 @@ class ClusteringManager:
             # Count tokens and check if we exceed the model's limit
             total_tokens = sum([openai_client.count_tokens(text)
                                for text in list_texts])
-            print(f"Cluster {cluster_num}: Total Tokens = {total_tokens}")
+            # print(f"Cluster {cluster_num}: Total Tokens = {total_tokens}")
 
             if total_tokens > max_tokens:
                 print(f"Warning: Token limit exceeded for cluster {
@@ -216,12 +215,15 @@ class ClusteringManager:
             # Query the LLM to suggest a name and quality score for the cluster
             cluster_name_result: ClusterNameStructuredOutput = openai_client.name_cluster(
                 cluster_number=f"Cluster {cluster_num}",
-                list_texts=list_texts
+                list_texts=list_texts,
+                existing_names=existing_cluster_names  # Pass the list of existing cluster names
             )
 
             # Store the suggested name and quality score for the cluster
             cluster_name_mapping[cluster_num] = cluster_name_result.suggested_cluster_name
             cluster_score_mapping[cluster_num] = cluster_name_result.quality_score
+            existing_cluster_names.append(
+                cluster_name_result.suggested_cluster_name)  # Update the list of names
             print(f"Cluster {cluster_num}: Suggested Name: {
                   cluster_name_result.suggested_cluster_name}; Quality Score: {cluster_name_result.quality_score}")
 
@@ -234,17 +236,19 @@ class ClusteringManager:
 
 
 if __name__ == "__main__":
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Append the timestamp to the filename
-    filename = f"code_review_clusters_{timestamp}.csv"
+    # Pattern to match files like 'code_review_clusters_*.csv'
+    pattern = "code_review_clusters_*.csv"
+    file_list = glob.glob(pattern)
+
     df: pd.DataFrame = pd.DataFrame()
 
-    # Load the DataFrame from the CSV file (if it exists)
-    if os.path.exists(filename):
-        print(f"Loading embeddings from {filename}...")
+    if file_list:
+        # Find the most recent file based on modification time
+        latest_file = max(file_list, key=os.path.getmtime)
+        print(f"Loading embeddings from {latest_file}...")
 
         try:
-            df = pd.read_csv(filename)
+            df = pd.read_csv(latest_file)
 
             # Convert 'embedding' string back to a list of floats (if necessary)
             df['embedding'] = df['embedding'].apply(lambda emb: eval(emb))
@@ -259,7 +263,7 @@ if __name__ == "__main__":
 
     # If no embeddings were loaded, generate new embeddings
     if df.empty:
-        print(f"{filename} not found or empty. Generating new embeddings...")
+        print(f"Generating new embeddings...")
 
         try:
             embedding_label = EmbeddingLabel()
@@ -295,10 +299,12 @@ if __name__ == "__main__":
 
     # df['embedding'] = df['embedding'].apply(lambda emb: str(emb))
 
-    # Step 6: Save the updated DataFrame to CSV
-    df.to_csv(filename, index=False)
-
-    print(f"CSV successfully saved to {filename}.")
+    # Save the updated DataFrame to a new timestamped CSV file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"code_review_clusters_{timestamp}.csv"
+    df.to_csv(output_filename, index=False)
+    print(f"CSV successfully saved to {output_filename}.")
+    print("\n")
     # Step 7: Summarize how many reviews per cluster
     cluster_summary = df['cluster_name'].value_counts()
     print("\nCluster Review Summary:")

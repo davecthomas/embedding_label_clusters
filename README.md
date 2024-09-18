@@ -134,3 +134,37 @@ sequenceDiagram
     ElSnowflake-->>SnowflakeDB: Insert or update classifications
 
 ```
+
+# Install
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip3 install -r requirements.txt
+vi .env
+```
+
+# Run the program
+
+Make sure you set up your .env file before running.
+
+## Environment
+
+# Snowflake Settings
+
+SNOWFLAKE_USER=
+SNOWFLAKE_ROLE=
+SNOWFLAKE_PASSWORD=
+SNOWFLAKE_ACCOUNT=
+SNOWFLAKE_WAREHOUSE=
+SNOWFLAKE_DB=
+SNOWFLAKE_SCHEMA=
+
+# Pinecone and OpenAI Shared Settings
+
+EMBEDDING_DIMENSIONS=1536
+
+OPENAI_API_KEY=
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_USER=
+OPENAI_COMPLETIONS_MODEL=gpt-4o-mini
