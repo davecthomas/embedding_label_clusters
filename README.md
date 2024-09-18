@@ -6,6 +6,16 @@ One of the biggest challenges when building machine learning models is the **man
 
 This project leverages **high-dimensional embedding vectors** to **automatically cluster** similar comments and uses a **Language Learning Model (LLM)** to provide a **name** and **quality score** for each cluster. This approach allows teams to rapidly generate labeled datasets for training machine learning models without manual effort, making it much easier to build **custom one-off ML models**.
 
+```mermaid
+graph LR
+    A[Generate Embeddings from Source Data] --> B[Reduce Embeddings with PCA/UMAP]
+    B --> C[K-Means Clustering]
+    C --> D[LLM-Assisted Labeling: Name Clusters & Assign Quality Scores]
+    D --> E[Apply Cluster Labels to Data]
+    E --> F[Train ML Model with Labeled Data]
+    E -.-> G[LLM Checking the Work: Independent LLM Grading Cluster Names]
+```
+
 ### Key Benefits:
 
 1. **Automated Labeling**: Automatically assign meaningful labels to large datasets, saving teams from manual, error-prone work.
@@ -132,6 +142,58 @@ sequenceDiagram
 
     ClusteringManager->>ElSnowflake: Store classifications in Snowflake
     ElSnowflake-->>SnowflakeDB: Insert or update classifications
+
+```
+
+### Implementing your own system
+
+#### Know your data
+
+Evaluate Before Clustering:
+
+1. Data Type: Continuous, Categorical, or Mixed?
+2. Cluster Shape: Spherical or Irregular?
+3. Cluster Count: Known or Unknown?
+4. Noise: Is there noise/outliers?
+5. Dimensionality: Is data high-dimensional >100?
+6. Scalability: Dataset Size?
+
+#### Other decisions to make
+
+```mermaid
+graph TD
+
+    A[Evaluate Data to be Labeled]
+    A --> B{Is the Data Natural Language?}
+
+    B --> C[Use Embedding Model for Natural Language]
+    C --> D[Decide on Dimensionality of Data]
+    D --> E{Dimensions > 100?}
+    E --> F[Reduce Embeddings with PCA/UMAP]
+    E --> G[Proceed without Dimensionality Reduction]
+
+    B --> H[Consider Other Feature Extraction for Non-Natural Language Data]
+
+    F --> I[K-Means Clustering]
+    G --> I[K-Means Clustering]
+    H --> I[K-Means Clustering]
+
+    I --> J[LLM-Assisted Labeling: Name Clusters & Assign Quality Scores]
+    J --> K[Apply Cluster Labels to Data]
+    J -.-> L[Optional LLM Validation: Independent LLM Grades Cluster Names]
+
+    style A stroke:#fff,stroke-width:1px,font-size:8px
+    style B stroke:#fff,stroke-width:1px,font-size:8px
+    style C stroke:#fff,stroke-width:1px,font-size:8px
+    style D stroke:#fff,stroke-width:1px,font-size:8px
+    style E stroke:#fff,stroke-width:1px,font-size:8px
+    style F stroke:#fff,stroke-width:1px,font-size:8px
+    style G stroke:#fff,stroke-width:1px,font-size:8px
+    style H stroke:#fff,stroke-width:1px,font-size:8px
+    style I stroke:#fff,stroke-width:1px,font-size:8px
+    style J stroke:#fff,stroke-width:1px,font-size:8px
+    style K stroke:#fff,stroke-width:1px,font-size:8px
+    style L stroke:#fff,stroke-width:1px,font-size:8px
 
 ```
 
