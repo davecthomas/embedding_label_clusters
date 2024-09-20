@@ -8,7 +8,7 @@ import numpy as np
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import List, Dict, Any
-from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse
+from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse, Embedding
 import pandas as pd
 import tiktoken
 import csv
@@ -43,6 +43,11 @@ class ClusterNameStructuredOutput(BaseModel):
 
 class ElOpenAI:
     DIMENSIONS_GEN3_OPENAI = 1536
+    EMBEDDING_TOKEN_LIMITS = {
+        "text-embedding-ada-002": 8191,  # Example token limit for 'text-embedding-ada-002'
+        "text-embedding-3-small": 8192,
+        "text-embedding-3-large": 16384
+    }
 
     # Dictionary containing LLM token limits (completions models)
     LLM_TOKEN_LIMITS = {
@@ -83,6 +88,15 @@ class ElOpenAI:
         # Since removing exclusion terms requires a more expensive API call, we default to False
         self.exclusion_prompt_support = os.getenv(
             "OPENAI_EXCLUSION_PROMPTS", "false").lower() == "true"
+
+    def get_embedding_token_limit(self) -> int:
+        """
+        Retrieves the token limit for the current embedding model.
+
+        Returns:
+            int: The maximum number of tokens the embedding model can process in a single request.
+        """
+        return self.EMBEDDING_TOKEN_LIMITS.get(self.embedding_model, 8192)  # Default to 8192 if model not found
 
     def get_llm_token_limit(self) -> int:
         """
@@ -134,6 +148,143 @@ class ElOpenAI:
             return x
         return x / norm
 
+    def truncate_string(self, text: str, max_tokens: int) -> str:
+        """
+        Truncates a string to the minimum of (max_tokens * 5) characters or its current length.
+
+        Args:
+            text (str): The original string to be truncated.
+            max_tokens (int): The maximum number of tokens allowed.
+
+        Returns:
+            str: The truncated string if it exceeds the token-based length limit, or the original string if within limits.
+        """
+        # Calculate the truncation length based on the token limit (max_tokens * 5)
+        truncation_length = min(max_tokens * 5, len(text))
+
+        # Truncate the string to the calculated length
+        truncated_text = text[:truncation_length]
+
+        return truncated_text
+
+    def _batch_embedding(self, batch_texts: List[str]) -> List[Dict[str, Any]]:
+        """
+        Calls OpenAI's embeddings API for a batch of texts.
+
+        Args:
+            batch_texts (List[str]): A batch of texts to generate embeddings for.
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries containing the generated embeddings.
+        """
+        if not batch_texts:
+            raise ValueError("Texts are required for generating embeddings.")
+
+        # Construct the parameters for the API call
+        params: EmbeddingCreateParams = {
+            "input": batch_texts,  # List of texts for batch processing
+            "model": self.embedding_model,  # Embedding model to use
+        }
+
+        max_retries = len(self.backoff_delays)
+
+        for attempt in range(max_retries):
+            try:
+                # Call the OpenAI API for batch embedding generation
+                response: CreateEmbeddingResponse = self.client.embeddings.create(
+                    **params)
+
+                # Return the API response with embeddings
+                return response.data
+
+            except (httpx.TimeoutException) as e:
+                wait_time = self.backoff_delays[attempt] + random.uniform(0, 1)
+                print(f"OpenAI embeddings attempt {
+                      attempt + 1} failed due to timeout: {e}. Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:  # Rate limit error
+                    wait_time = self.backoff_delays[attempt] + \
+                        random.uniform(0, 1)
+                    print(f"Rate limit reached. Retrying in {
+                          wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"HTTP error occurred: {e}")
+                    raise
+
+            except Exception as e:
+                print(f"An unexpected error occurred: {
+                      e}. Retrying if applicable...")
+                wait_time = self.backoff_delays[min(
+                    attempt, len(self.backoff_delays) - 1)]
+                time.sleep(wait_time)
+
+        # If all retries failed, raise a timeout error
+        raise TimeoutError(
+            "Failed to generate embeddings after multiple retries due to repeated timeouts or errors.")
+
+    def generate_embeddings(self, df: pd.DataFrame, batch_size: int = 50) -> pd.DataFrame:
+        """
+        Generates embeddings for review comments and adds them to the DataFrame.
+
+        Args:
+            df (pd.DataFrame): The DataFrame containing the review comments.
+            batch_size (int): Number of texts to process in each batch (default is 100).
+
+        Returns:
+            pd.DataFrame: The updated DataFrame with an added 'embedding' column.
+        """
+        # Ensure that the 'body' column contains the text to be embedded
+        texts = df['body'].tolist()
+        len_texts = len(texts)
+
+        # Get the token limit for the current embedding model
+        max_tokens: int = self.get_embedding_token_limit()
+
+        embeddings = []  # List to store all embeddings
+        batch_embeddings = []
+
+        # Process the texts in batches
+        for i in range(0, len_texts, batch_size):
+            batch_texts = texts[i:i + batch_size]
+
+            # Calculate the total tokens in the batch so we don't blow out the embedding token limit
+            total_tokens = sum([self.count_tokens(text)
+                               for text in batch_texts])
+            if total_tokens > max_tokens:
+                print(f"Batch {i} is {total_tokens}, which is beyond the API limit of {
+                      max_tokens}. Truncating some comments.")
+                batch_texts = [self.truncate_string(
+                    text, max_tokens) for text in batch_texts]
+
+            try:
+                # Generate embeddings for the current batch
+                embeddings_data = self._batch_embedding(batch_texts)
+
+                # Extract embeddings from the returned data
+                batch_embeddings: List[Embedding] = [data.embedding
+                                                     for data in embeddings_data]
+
+                # Add the batch embeddings to the embeddings list
+                embeddings.extend(batch_embeddings)
+
+                # Progress update
+                print(f"\r\tGenerated embeddings for {i + len(batch_texts)
+                                                      } out of {len_texts}", end="")
+
+            except Exception as e:
+                print(f"Error generating embeddings for batch {
+                      i // batch_size + 1}: {e}")
+                break  # You could decide to handle errors more gracefully here
+
+        # Add the embeddings to the DataFrame as a new column
+        df['embedding'] = embeddings
+        print("\n\tEmbeddings generation completed.")
+
+        return df  # Return the DataFrame with the added 'embedding' column
+
     def generate_embedding(self, text: str) -> Dict[str, Any]:
         """
         Generates embedding for a given text using OpenAI's embeddings API.
@@ -170,14 +321,15 @@ class ElOpenAI:
                     "user": self.user  # User identifier
                 }
             except (httpx.TimeoutException) as e:
-                wait_time = self.backoff_delays[attempt]
+                wait_time = self.backoff_delays[attempt] + random.uniform(0, 1)
                 print(f"\tOpenAI embeddings attempt {
                       attempt + 1} failed: {e}. Retrying in {wait_time} seconds...")
                 time.sleep(wait_time + random.uniform(0, 1))
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:  # Rate limit error
-                    wait_time = self.backoff_delays[attempt]
+                    wait_time = self.backoff_delays[attempt] + \
+                        random.uniform(0, 1)
                     print(f"\tRate limit reached. Retrying in {
                           wait_time} seconds...")
                     time.sleep(wait_time + random.uniform(0, 1))
@@ -246,7 +398,8 @@ class ElOpenAI:
         system_prompt = (
             "Your task is to name a cluster of code review comments based on recurring patterns or key topics. "
             "Avoid names similar to existing clusters and assign a quality score (1-5) based on the specificity and usefulness of the comments, "
-            "where 1 is for acknowledgements and 5 is for impactful suggestions. "
+            "where lower scores are for 'no detail or low information' comments, such as agreements and acknowledgements, middle scores for 'moderately helpful or low detail comments', and higher scores for 'impactful and detailed suggestions'. "
+            "Work to distinguish the subtle differences by considering how useful a developer would find the comment."
             "Here are the existing cluster names: "
             f"{', '.join(existing_names)}. ")
 
@@ -358,7 +511,7 @@ class ElOpenAI:
 
         for index, row in df.iterrows():
             print(f"\r\tConverting embedding to numeric array for clustering {
-                  index}", end="")
+                  index+1}", end="")
 
             # Get the actual embedding (list of floats)
             embedding_value = row['embedding']

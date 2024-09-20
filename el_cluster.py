@@ -4,7 +4,6 @@ import os
 import glob
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 from el_openai import ClusterNameStructuredOutput, ElOpenAI
 from el_snowflake import ElSnowflake
 from embedding_label import EmbeddingLabel
@@ -13,9 +12,9 @@ import umap
 from typing import List
 
 # the number of samples to use from each cluster when querying the LLM
-NUM_SAMPLES_PER_CLUSTER = 26        # Reduce this to limit LLM token usage
+NUM_SAMPLES_PER_CLUSTER = 30        # Reduce this to limit LLM token usage
 # Increase this to have a bigger/more representative training data set
-MAX_REVIEWS_TO_CLASSIFY = 1500
+MAX_REVIEWS_TO_CLASSIFY = 11000     # roughly 10% of the total number of reviews
 
 
 class ClusteringManager:
@@ -264,7 +263,7 @@ if __name__ == "__main__":
 
     # If no embeddings were loaded, generate new embeddings
     if df.empty:
-        print(f"Generating embeddings...")
+        print(f"Generating {MAX_REVIEWS_TO_CLASSIFY} embeddings...")
 
         try:
             embedding_label = EmbeddingLabel()
@@ -274,16 +273,16 @@ if __name__ == "__main__":
             if df.empty:
                 raise ValueError("No embeddings were generated.")
 
-            print(f"New embeddings generated.")
+            print(f"{len(df)} embeddings generated.")
 
         except Exception as e:
-            print(f"An error occurred while generating embeddings: {e}")
+            print(f"\nAn error occurred while generating embeddings: {e}")
             exit(1)
 
     # Initialize the ClusteringManager with the DataFrame
     manager = ClusteringManager(df)
 
-    # Step 1: Reduce dimensionality to 50 dimensions for clustering
+    # Step 1: Reduce dimensionality to 100 dimensions for clustering (avoid the curse of dimensionality)
     reduced_embeddings = manager.reduce_with_pca(n_components=100)
 
     # Step 2: Run K-Means clustering and get the labels (array of integers)
@@ -299,14 +298,6 @@ if __name__ == "__main__":
     # Step 4: Drop the 'user' column if it exists
     df = df.drop(columns=['user', 'dimensions'], errors='ignore')
 
-    # df['embedding'] = df['embedding'].apply(lambda emb: str(emb))
-
-    # Save the updated DataFrame to a new timestamped CSV file
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"code_review_clusters_{timestamp}.csv"
-    df.to_csv(output_filename, index=False)
-    print(f"CSV successfully saved to {output_filename}.")
-    print("\n")
     # Step 7: Summarize how many reviews per cluster
     cluster_summary = df['cluster_name'].value_counts()
     print("\nCluster Review Summary:")
@@ -315,5 +306,15 @@ if __name__ == "__main__":
     print("Storing the review classifications in Snowflake so we have a training data set...")
     snowflake_client = ElSnowflake()
     # Store the classifications and comments in Snowflake
-    snowflake_client.store_classification(df)
+    snowflake_client.store_classification_batch(df)
     print("\nDone. Review classifications stored in Snowflake. Check the 'pr_review_comments_training' table.")
+
+    # Save the updated DataFrame to a new timestamped CSV file
+    if len(df) > 2000:
+        df = df.iloc[:2000]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"code_review_clusters_{timestamp}.csv"
+    df.to_csv(output_filename, index=False)
+    print(f"CSV successfully saved to {output_filename}.")
+    print("\n")

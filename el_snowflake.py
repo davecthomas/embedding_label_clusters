@@ -1,14 +1,9 @@
-import json
 import os
-import random
 import time
-from typing import Dict, Optional, List, Any, Tuple
-import numpy as np
+from typing import Dict, Optional
 import pandas as pd
 import snowflake.connector
-from datetime import datetime, timezone
-
-from el_openai import ElOpenAI
+import json
 
 
 class ElSnowflake:
@@ -97,7 +92,7 @@ class ElSnowflake:
             print(f"Snowflake connection test failed with error: {e}")
             return False
 
-    def get_review_comments(self, limit: int = 100) -> pd.DataFrame:
+    def get_review_comments(self, limit) -> pd.DataFrame:
         """
         Fetches review comments from Snowflake along with the comment_id.
         """
@@ -107,7 +102,7 @@ class ElSnowflake:
             conn = self.get_snowflake_connection()
             query = f"""
                 SELECT
-                    "comment_id",   -- Add comment_id to fetch
+                    "comment_id",
                     "repo_name",
                     "pr_number",
                     "user_login",
@@ -117,6 +112,7 @@ class ElSnowflake:
                     "pr_review_comments"
                 WHERE
                     "body" IS NOT NULL
+                ORDER BY RANDOM()   -- Randomize the order, important to ensure we get a good mix
                 {limit};
             """
             df = pd.read_sql(query, conn)
@@ -151,17 +147,17 @@ class ElSnowflake:
                          USING (
                              SELECT
                                  '{comment_id}' AS "comment_id",
-                                 '{label.replace("'", "''")}' AS "label",
+                                 '{label.replace("'", "''")}' AS "LABEL",
                                  '{body.replace("'", "''")}' AS "body",
                                  {quality_score} AS "quality_score"
                          ) AS source
                          ON target."comment_id" = source."comment_id"
                          WHEN MATCHED THEN
-                             UPDATE SET target."label" = source."label", target."quality_score" = source."quality_score"
+                             UPDATE SET target."LABEL" = source."LABEL", target."quality_score" = source."quality_score"
                          WHEN NOT MATCHED THEN
-                             INSERT ("comment_id", "label",
+                             INSERT ("comment_id", "LABEL",
                                      "body", "quality_score")
-                             VALUES (source."comment_id", source."label",
+                             VALUES (source."comment_id", source."LABEL",
                                      source."body", source."quality_score");
                      """
                     # Execute the query
@@ -176,57 +172,64 @@ class ElSnowflake:
         except Exception as e:
             print(f"\nError storing classifications: {e}")
 
-    def store_classification_batch(self, df: pd.DataFrame, batch_size: int = 100):
+    def store_classification_batch(self, df: pd.DataFrame, batch_size: int = 500):
         """
-        Stores classification (cluster name), comment body, and quality score in the training table based on comment_id.
+        Stores classification (cluster name), comment body, quality score, and embeddings in the training table based on comment_id.
         This version batches the data into a single query to speed up the process.
 
         Args:
-            df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), comment body, and quality score.
+            df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), comment body, quality score, and embeddings.
             batch_size (int): Number of rows to include in each batch. Default is 100.
         """
+        num_rows: int = len(df)
+        batch_size: int = min(num_rows, batch_size)  # Adjust based on testing
+        # Calculate the total number of batches
+        # This ensures rounding up for partial batches
+        total_batches: int = (num_rows + batch_size - 1) // batch_size
+
         try:
             conn = self.get_snowflake_connection()
+            cursor = conn.cursor()
+
+            # Prepare the parameterized SQL query
+            query = """
+                MERGE INTO "pr_review_comments_training" AS target
+                USING (SELECT
+                    %s AS "comment_id",
+                    %s AS "LABEL",
+                    %s AS "body",
+                    %s AS "quality_score",
+                    PARSE_JSON(%s) AS "embedding"
+                ) AS source
+                ON target."comment_id" = source."comment_id"
+                WHEN MATCHED THEN
+                    UPDATE SET target."LABEL" = source."LABEL",
+                            target."quality_score" = source."quality_score",
+                            target."embedding" = source."embedding"
+                WHEN NOT MATCHED THEN
+                    INSERT ("comment_id", "LABEL", "body", "quality_score", "embedding")
+                    VALUES (source."comment_id", source."LABEL", source."body", source."quality_score", source."embedding");
+            """
 
             # Process the DataFrame in batches
-            for start in range(0, len(df), batch_size):
-                print(f"\r\tStoring batch {
-                      start // batch_size + 1} (rows {start} to {start + len(batch_df) - 1})", end="")
+            for start in range(0, num_rows, batch_size):
                 batch_df = df.iloc[start:start + batch_size]
-
-                # Create a list of values to be inserted/updated in SQL
-                values_list = []
-                for i, row in batch_df.iterrows():
-                    comment_id = row['comment_id']
-                    label = row['cluster_name']
-                    # Handle single quotes in SQL
-                    body = row['body'].replace("'", "''")
-                    quality_score = row['quality_score']
-
-                    # Add to list (SQL friendly format)
-                    values_list.append(
-                        f"('{comment_id}', '{label.replace("'", "''")}', '{body}', {quality_score})")
-
-                # Join all rows into a single query for batch insert/merge
-                values_string = ", ".join(values_list)
-
-                # Create the batch MERGE SQL query
-                query = f"""
-                    MERGE INTO "pr_review_comments_training_test_batch" AS target
-                    USING (VALUES {values_string}) AS source("comment_id", "label", "body", "quality_score")
-                    ON target."comment_id" = source."comment_id"
-                    WHEN MATCHED THEN
-                        UPDATE SET target."label" = source."label", target."quality_score" = source."quality_score"
-                    WHEN NOT MATCHED THEN
-                        INSERT ("comment_id", "label", "body", "quality_score")
-                        VALUES (source."comment_id", source."label", source."body", source."quality_score");
-                """
-
-                # Execute the query
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                print(f"\rBatch {start // batch_size + 1} completed.", end="")
-
+                data = [
+                    (
+                        row['comment_id'],
+                        row['cluster_name'],
+                        row['body'],
+                        row['quality_score'],
+                        # Convert embedding to JSON string
+                        json.dumps(row['embedding'])
+                    ) for idx, row in batch_df.iterrows()
+                ]
+                cursor.executemany(query, data)
+                print(
+                    (f"\r\tBatch {start // batch_size + 1}"
+                     " of {total_batches} completed."),
+                    end="")
+            cursor.close()
         except Exception as e:
             print(f"\nError storing classifications: {e}")
 
