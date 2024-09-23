@@ -172,7 +172,7 @@ class ElSnowflake:
         except Exception as e:
             print(f"\nError storing classifications: {e}")
 
-    def store_classification_batch(self, df: pd.DataFrame, batch_size: int = 500):
+    def store_classification_batch(self, df: pd.DataFrame, mode, batch_size: int = 500):
         """
         Stores classification (cluster name), comment body, quality score, and embeddings in the training table based on comment_id.
         This version batches the data into a single query to speed up the process.
@@ -181,6 +181,10 @@ class ElSnowflake:
             df (pd.DataFrame): DataFrame containing comment_id, cluster names (label), comment body, quality score, and embeddings.
             batch_size (int): Number of rows to include in each batch. Default is 100.
         """
+        if mode == "training":
+            table_name = "pr_review_comments_training"
+        elif mode == "validation":
+            table_name = "pr_review_comments_validation"
         num_rows: int = len(df)
         batch_size: int = min(num_rows, batch_size)  # Adjust based on testing
         # Calculate the total number of batches
@@ -192,8 +196,8 @@ class ElSnowflake:
             cursor = conn.cursor()
 
             # Prepare the parameterized SQL query
-            query = """
-                MERGE INTO "pr_review_comments_training" AS target
+            query = f"""
+                MERGE INTO "{table_name}" AS target
                 USING (SELECT
                     %s AS "comment_id",
                     %s AS "LABEL",
@@ -207,7 +211,8 @@ class ElSnowflake:
                             target."quality_score" = source."quality_score",
                             target."embedding" = source."embedding"
                 WHEN NOT MATCHED THEN
-                    INSERT ("comment_id", "LABEL", "body", "quality_score", "embedding")
+                    INSERT ("comment_id", "LABEL", "body",
+                            "quality_score", "embedding")
                     VALUES (source."comment_id", source."LABEL", source."body", source."quality_score", source."embedding");
             """
 
@@ -227,7 +232,7 @@ class ElSnowflake:
                 cursor.executemany(query, data)
                 print(
                     (f"\r\tBatch {start // batch_size + 1}"
-                     " of {total_batches} completed."),
+                     f" of {total_batches} completed."),
                     end="")
             cursor.close()
         except Exception as e:

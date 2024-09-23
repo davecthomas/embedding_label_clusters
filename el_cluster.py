@@ -14,7 +14,9 @@ from typing import List
 # the number of samples to use from each cluster when querying the LLM
 NUM_SAMPLES_PER_CLUSTER = 30        # Reduce this to limit LLM token usage
 # Increase this to have a bigger/more representative training data set
-MAX_REVIEWS_TO_CLASSIFY = 11000     # roughly 10% of the total number of reviews
+# training set: roughly 10% of the total number of reviews
+MAX_REVIEWS_TO_TRAIN = 11000
+MAX_REVIEWS_TO_VALIDATE = 2200     # validation set: 20% of training set
 
 
 class ClusteringManager:
@@ -235,10 +237,24 @@ class ClusteringManager:
         return df
 
 
+TRAINING_MODE = "training"
+VALIDATING_MODE = "validation"
+"""
+In training mode, the script generates new embeddings and clusters them using K-Means, then names the clusters using the LLM.
+In validation mode, the script generates new embeddings only. It will leave the clustering decision to the model we are testing.
+"""
+
 if __name__ == "__main__":
     # Pattern to match files like 'code_review_clusters_*.csv'
     pattern = "code_review_clusters_*.csv"
     file_list = glob.glob(pattern)
+
+    mode = VALIDATING_MODE
+
+    if mode == TRAINING_MODE:
+        max_reviews = MAX_REVIEWS_TO_TRAIN
+    else:
+        max_reviews = MAX_REVIEWS_TO_VALIDATE
 
     df: pd.DataFrame = pd.DataFrame()
 
@@ -263,12 +279,12 @@ if __name__ == "__main__":
 
     # If no embeddings were loaded, generate new embeddings
     if df.empty:
-        print(f"Generating {MAX_REVIEWS_TO_CLASSIFY} embeddings...")
+        print(f"Generating {max_reviews} embeddings...")
 
         try:
             embedding_label = EmbeddingLabel()
             df: pd.DataFrame = embedding_label.generate_review_embeddings(
-                limit=MAX_REVIEWS_TO_CLASSIFY)
+                limit=max_reviews)
 
             if df.empty:
                 raise ValueError("No embeddings were generated.")
@@ -279,42 +295,51 @@ if __name__ == "__main__":
             print(f"\nAn error occurred while generating embeddings: {e}")
             exit(1)
 
-    # Initialize the ClusteringManager with the DataFrame
-    manager = ClusteringManager(df)
+    if mode == TRAINING_MODE:
+        # Initialize the ClusteringManager with the DataFrame
+        manager = ClusteringManager(df)
 
-    # Step 1: Reduce dimensionality to 100 dimensions for clustering (avoid the curse of dimensionality)
-    reduced_embeddings = manager.reduce_with_pca(n_components=100)
+        # Step 1: Reduce dimensionality to 100 dimensions for clustering (avoid the curse of dimensionality)
+        reduced_embeddings = manager.reduce_with_pca(n_components=100)
 
-    # Step 2: Run K-Means clustering and get the labels (array of integers)
-    kmeans_labels = manager.kmeans_clustering(reduced_embeddings, n_clusters=7)
+        # Step 2: Run K-Means clustering and get the labels (array of integers)
+        kmeans_labels = manager.kmeans_clustering(
+            reduced_embeddings, n_clusters=7)
 
-    # Initialize the OpenAI client
-    openai_client = ElOpenAI()
+        # Initialize the OpenAI client
+        openai_client = ElOpenAI()
 
-    # Step 3: Name the clusters using LLM and update the DataFrame
-    print("Naming clusters using the Large Language Model...")
-    df = manager.name_clusters_with_llm(df, kmeans_labels, openai_client)
+        # Step 3: Name the clusters using LLM and update the DataFrame
+        print("Naming clusters using the Large Language Model...")
+        df = manager.name_clusters_with_llm(df, kmeans_labels, openai_client)
 
     # Step 4: Drop the 'user' column if it exists
     df = df.drop(columns=['user', 'dimensions'], errors='ignore')
 
     # Step 7: Summarize how many reviews per cluster
-    cluster_summary = df['cluster_name'].value_counts()
-    print("\nCluster Review Summary:")
-    print(cluster_summary)
+    if mode == TRAINING_MODE:
+        cluster_summary = df['cluster_name'].value_counts()
+        print("\nCluster Review Summary:")
+        print(cluster_summary)
+    else:
+        df['quality_score'] = None
+        df['cluster_name'] = ""
 
-    print("Storing the review classifications in Snowflake so we have a training data set...")
+    print(f"Storing the review classifications in Snowflake so we have a "
+          f"{mode} data set...")
     snowflake_client = ElSnowflake()
     # Store the classifications and comments in Snowflake
-    snowflake_client.store_classification_batch(df)
-    print("\nDone. Review classifications stored in Snowflake. Check the 'pr_review_comments_training' table.")
+    snowflake_client.store_classification_batch(df, mode=mode)
+    print(f"\nDone. Review classifications stored in Snowflake. Check the 'pr_review_comments_{
+          mode}' table.")
 
-    # Save the updated DataFrame to a new timestamped CSV file
-    if len(df) > 2000:
-        df = df.iloc[:2000]
+    if mode == TRAINING_MODE:
+        # Save the updated DataFrame to a new timestamped CSV file
+        if len(df) > 2000:
+            df = df.iloc[:2000]
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"code_review_clusters_{timestamp}.csv"
-    df.to_csv(output_filename, index=False)
-    print(f"CSV successfully saved to {output_filename}.")
-    print("\n")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"code_review_clusters_{timestamp}.csv"
+        df.to_csv(output_filename, index=False)
+        print(f"CSV successfully saved to {output_filename}.")
+        print("\n")

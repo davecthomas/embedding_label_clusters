@@ -27,18 +27,18 @@ CREATE TABLE IF NOT EXISTS "pr_review_comments_training" (
     "body" TEXT,
     "created_at" TIMESTAMP_NTZ,
     LABEL TEXT, -- this is our classification column. Due to a bug in Snowflake prediction, we can't use lower case here.
-    "quality_score" INT DEFAULT NULL -- this is an optional column for quality score
-    "embedding" ARRAY;    -- this is the embedding of the comment
+    "quality_score" INT DEFAULT NULL, -- this is an optional column for quality score
+    "embedding" ARRAY    -- this is the embedding of the comment
 );
 
-CREATE TABLE IF NOT EXISTS "pr_review_comments_training_backup" (
+CREATE TABLE IF NOT EXISTS "pr_review_comments_validation_set" (
     "comment_id" BIGINT PRIMARY KEY,
     "repo_name" VARCHAR(256),
     "pr_number" VARCHAR(64),
     "user_login" VARCHAR(256),
     "body" TEXT,
     "created_at" TIMESTAMP_NTZ,
-    LABEL TEXT,  -- Copy of the original LABEL column
-    "quality_score" INT DEFAULT NULL -- Copy of the original quality score column
+    LABEL TEXT, -- this is our classification column. Due to a bug in Snowflake prediction, we can't use lower case here.
+    "quality_score" INT DEFAULT NULL, -- this is an optional column for quality score
+    "embedding" ARRAY    -- this is the embedding of the comment
 );
-
