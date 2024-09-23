@@ -2,9 +2,9 @@
 
 **Background: Overcoming the Human Labeling Bottleneck**
 
-One of the biggest challenges when building machine learning models is the **manual effort** required for **human labeling** of data. In tasks like classifying **code review comments** or categorizing feedback, manually labeling thousands of comments is time-consuming, prone to inconsistencies, and requires significant domain expertise.
+One of the biggest challenges in data categorization tasks is the manual effort required for human labeling. Whether it's classifying code review comments or organizing feedback, manually labeling thousands of entries is time-consuming, prone to inconsistencies, and demands significant domain expertise.
 
-This project leverages **high-dimensional embedding vectors** to **automatically cluster** similar comments and uses a **Language Learning Model (LLM)** to provide a **name** and **quality score** for each cluster. This approach allows teams to rapidly generate labeled datasets for training machine learning models without manual effort, making it much easier to build **custom one-off ML models**.
+This project leverages high-dimensional embedding vectors to automatically cluster similar comments and utilizes a Large Language Model (LLM) to assign a name and quality score to each cluster. This approach enables teams to rapidly generate organized datasets without manual effort, streamlining the process of building custom classification systems.
 
 ```mermaid
 graph LR
@@ -12,8 +12,8 @@ graph LR
     B --> C[K-Means Clustering]
     C --> D[LLM-Assisted Labeling: Name Clusters & Assign Quality Scores]
     D --> E[Apply Cluster Labels to Data]
-    E --> F[Train ML Model with Labeled Data]
-    E -.-> G[LLM Checking the Work: Independent LLM Grading Cluster Names]
+    E --> F[LLM Checking the Work: Independent LLM Grading Cluster Names]
+    F --> G[Future data classified by constraining LLM decision to pre-existing cluster names]
 ```
 
 ### Key Benefits:
