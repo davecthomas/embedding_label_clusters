@@ -295,17 +295,17 @@ if __name__ == "__main__":
             print(f"\nAn error occurred while generating embeddings: {e}")
             exit(1)
 
+    # Initialize the ClusteringManager with the DataFrame
+    manager = ClusteringManager(df)
+
+    # Step 1: Reduce dimensionality to 100 dimensions for clustering (avoid the curse of dimensionality)
+    reduced_embeddings = manager.reduce_with_pca(n_components=100)
+
+    # Step 2: Run K-Means clustering and get the labels (array of integers)
+    kmeans_labels = manager.kmeans_clustering(
+        reduced_embeddings, n_clusters=7)
+
     if mode == TRAINING_MODE:
-        # Initialize the ClusteringManager with the DataFrame
-        manager = ClusteringManager(df)
-
-        # Step 1: Reduce dimensionality to 100 dimensions for clustering (avoid the curse of dimensionality)
-        reduced_embeddings = manager.reduce_with_pca(n_components=100)
-
-        # Step 2: Run K-Means clustering and get the labels (array of integers)
-        kmeans_labels = manager.kmeans_clustering(
-            reduced_embeddings, n_clusters=7)
-
         # Initialize the OpenAI client
         openai_client = ElOpenAI()
 
